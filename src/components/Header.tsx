@@ -75,6 +75,12 @@ export function Layout({ children, isLoggedIn }: { children: React.ReactNode; is
               >
                 Events
               </button>
+              <button
+                onClick={() => navigate('/events/create')}
+                className="text-lg font-semibold text-gray-800 hover:text-blue-600 text-left"
+              >
+                Create Events
+              </button>
               {isLoggedIn ? (
                 <button
                   onClick={() => navigate('/logout')}
