@@ -1,103 +1,165 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useCallback, useState, useEffect, useRef } from 'react';
+import Image from 'next/image';
+import { IoIosArrowBack, IoIosArrowForward } from 'react-icons/io';
+import { EventList } from '@/components/EventList';
+import Link from 'next/link';
+
+const slides = ['/hero1.jpeg', '/hero2.jpg', '/hero3.jpeg'];
+
+export default function HomePage() {
+  const [current, setCurrent] = useState(0);
+  const length = slides.length;
+
+  // Ref container scroll horizontal upcoming events
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const nextSlide = useCallback(() => {
+    setCurrent((prev) => (prev + 1) % length);
+  }, [length]);
+    const prevSlide = useCallback(() => {
+    setCurrent((prev) => (prev - 1 + length) % length);
+  }, [length]);
+
+  useEffect(() => {
+    const timer = setInterval(nextSlide, 5000);
+    return () => clearInterval(timer);
+  }, [length, nextSlide]);
+
+
+  const scroll = (direction: 'left' | 'right') => {
+    if (!scrollRef.current) return;
+    const { clientWidth, scrollLeft } = scrollRef.current;
+    const scrollAmount = clientWidth * 0.8;
+    if (direction === 'left') {
+      scrollRef.current.scrollTo({ left: scrollLeft - scrollAmount, behavior: 'smooth' });
+    } else {
+      scrollRef.current.scrollTo({ left: scrollLeft + scrollAmount, behavior: 'smooth' });
+    }
+  };
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main className="bg-gray-50 min-h-screen">
+      {/* Hero Carousel */}
+      <div className="relative w-full max-w-screen-xl h-[450px] mx-auto mt-8 rounded-xl overflow-hidden shadow-xl">
+        {slides.map((src, i) => (
+          <div
+            key={i}
+            className={`absolute inset-0 transition-opacity duration-700 ${
+              i === current ? 'opacity-100 z-10' : 'opacity-0 z-0'
+            }`}
+          >
+            <Image src={src} alt={`Slide ${i}`} fill className="object-cover" priority={i === 0} />
+            <div className="absolute inset-0 bg-black/40 flex flex-col justify-center items-center px-6">
+              <h1 className="text-white text-4xl md:text-5xl font-bold mb-2 drop-shadow-lg text-center">
+                {/* Judul kosong, bisa diisi nanti */}
+              </h1>
+              <p className="text-white text-lg md:text-xl drop-shadow-md text-center">
+                {/* Deskripsi kosong, bisa diisi nanti */}
+              </p>
+            </div>
+          </div>
+        ))}
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+        {/* Carousel arrows */}
+        <button
+          onClick={prevSlide}
+          className="absolute z-20 left-6 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white p-2 rounded-full shadow"
+          aria-label="Previous Slide"
+        >
+          <IoIosArrowBack size={24} />
+        </button>
+        <button
+          onClick={nextSlide}
+          className="absolute z-20 right-6 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white p-2 rounded-full shadow"
+          aria-label="Next Slide"
+        >
+          <IoIosArrowForward size={24} />
+        </button>
+
+        {/* Carousel dots */}
+        <div className="absolute z-20 bottom-6 left-1/2 -translate-x-1/2 flex space-x-2">
+          {slides.map((_, idx) => (
+            <button
+              key={idx}
+              onClick={() => setCurrent(idx)}
+              className={`w-3 h-3 rounded-full transition ${
+                idx === current ? 'bg-white' : 'bg-gray-400'
+              }`}
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+          ))}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
+      </div>
+
+      {/* Upcoming Events dengan scroll horizontal */}
+      <section className="py-16">
+        <div className="max-w-screen-xl mx-auto px-6 relative">
+          <h2 className="text-3xl font-bold mb-6 text-center">Upcoming Events</h2>
+
+          {/* Tombol panah kiri */}
+          <button
+            onClick={() => scroll('left')}
+            className="absolute left-0 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white p-2 rounded-full shadow z-10"
+            aria-label="Scroll Left"
+          >
+            <IoIosArrowBack size={24} />
+          </button>
+
+          {/* Container scroll */}
+          <div
+            ref={scrollRef}
+            className="flex space-x-6 overflow-x-auto scrollbar-hide scroll-smooth py-4 px-2"
+            style={{ scrollBehavior: 'smooth' }}
+          >
+            {/* Panggil EventList, asumsikan sudah render card event */}
+            <EventList />
+          </div>
+
+          {/* Tombol panah kanan */}
+          <button
+            onClick={() => scroll('right')}
+            className="absolute right-0 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white p-2 rounded-full shadow z-10"
+            aria-label="Scroll Right"
+          >
+            <IoIosArrowForward size={24} />
+          </button>
+
+          <div className="text-center mt-8">
+            <Link href="/events">
+              <button className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg transition">
+                🎫 Lihat Semua Event
+              </button>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Section kategori event */}
+      <section className="py-16 bg-white">
+        <div className="max-w-screen-xl mx-auto px-6">
+          <h2 className="text-3xl font-bold mb-8 text-center">Kategori Event</h2>
+          <div className="flex justify-center gap-8 flex-wrap">
+            <Link href="/events?category=workshop">
+              <div className="cursor-pointer bg-blue-100 text-blue-800 px-6 py-4 rounded-lg shadow-md hover:bg-blue-200 transition">
+                Workshop
+              </div>
+            </Link>
+            <Link href="/events?category=konser">
+              <div className="cursor-pointer bg-green-100 text-green-800 px-6 py-4 rounded-lg shadow-md hover:bg-green-200 transition">
+                Konser
+              </div>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="bg-white py-8 mt-12 shadow-inner">
+        <div className="max-w-screen-xl mx-auto px-6 text-center text-gray-600">
+          &copy; {new Date().getFullYear()} EventJoy. All rights reserved.
+        </div>
       </footer>
-    </div>
+    </main>
   );
 }
