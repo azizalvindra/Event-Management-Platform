@@ -1,3 +1,5 @@
+// src/app/events/[id]/page.tsx
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -17,6 +19,7 @@ interface Event {
   id: string;
   title: string;
   description: string;
+  category: string; // ✅ tambah field kategori
   country: string;
   state: string;
   city: string;
@@ -45,7 +48,7 @@ export default function EventDetailPage() {
       setLoading(true);
       const { data, error } = await supabase
         .from('events')
-        .select('*, ticket_types(*), capacity')
+        .select('*, ticket_types(*), category, capacity')
         .eq('id', id)
         .single();
 
@@ -53,9 +56,7 @@ export default function EventDetailPage() {
         console.error('Error fetching event:', error.message);
       } else {
         setEvent(data);
-        if (data?.ticket_types?.length) {
-          setSelectedType(data.ticket_types[0]);
-        }
+        if (data?.ticket_types?.length) setSelectedType(data.ticket_types[0]);
       }
       setLoading(false);
     };
@@ -74,24 +75,11 @@ export default function EventDetailPage() {
 
   return (
     <main className="max-w-screen-xl mx-auto p-6 relative">
-      {/* Tombol Manage Promotions */}
-      <button
-        onClick={() => router.push(`/events/${id}/promotions`)}
-        className="absolute top-4 left-4 bg-blue-600 text-white px-3 py-1 rounded-md text-sm hover:bg-blue-700 transition-shadow shadow-md z-20"
-      >
-        Manage Promotions
-      </button>
-
       <div className="flex flex-col md:flex-row gap-6">
         {/* Image Section */}
         <div className="relative w-full md:w-1/2 h-64 md:h-auto rounded-lg overflow-hidden">
           {event.imageUrl ? (
-            <Image
-              src={event.imageUrl}
-              alt={event.title}
-              fill
-              className="object-cover"
-            />
+            <Image src={event.imageUrl} alt={event.title} fill className="object-cover" />
           ) : (
             <div className="bg-gray-200 w-full h-full flex items-center justify-center">
               <span className="text-gray-500">No Image</span>
@@ -101,7 +89,12 @@ export default function EventDetailPage() {
 
         {/* Details Section */}
         <div className="flex-1">
-          <h1 className="text-4xl font-bold mb-4">{event.title}</h1>
+          <h1 className="text-4xl font-bold mb-2">{event.title}</h1>
+
+          {/* Kategori */}
+          {event.category && (
+            <p className="text-sm text-gray-500 mb-4">Kategori: {event.category}</p>
+          )}
 
           <p className="text-gray-600 mb-1">
             📍 {event.venue}, {event.city}, {event.state}, {event.country}
@@ -116,7 +109,6 @@ export default function EventDetailPage() {
 
           <p className="text-gray-800 mb-6">{event.description}</p>
 
-          {/* Display capacity */}
           <p className="text-sm text-gray-500 mb-4">
             Total Capacity: {event.capacity.toLocaleString()} tickets
           </p>
@@ -129,9 +121,7 @@ export default function EventDetailPage() {
                 className="w-full p-2 rounded border focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                 value={selectedType?.id || ''}
                 onChange={(e) => {
-                  const type = event.ticket_types.find(
-                    (t) => t.id === e.target.value
-                  );
+                  const type = event.ticket_types.find((t) => t.id === e.target.value);
                   setSelectedType(type || null);
                   setQuantity(1);
                 }}

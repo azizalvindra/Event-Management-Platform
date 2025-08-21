@@ -29,6 +29,7 @@ type Event = {
   capacity: number;
   available_seats: number;
   imageUrl: string | null;
+  category: string; // tambah category
   ticket_types: TicketType[];
 };
 
@@ -44,28 +45,30 @@ export default function EventListClient() {
       setLoading(true);
       const { data, error } = await supabase
         .from('events')
-        .select(`*, ticket_types(*), capacity`)
+        .select(`*, ticket_types(*)`)
         .order('date', { ascending: true });
 
       if (error) {
         console.error('Failed to fetch events:', error);
         setEvents([]);
       } else if (data) {
-        const filtered = data.filter((e) => {
-          const dateStr = new Date(e.date).toLocaleDateString();
-          const haystack = [
-            e.title,
-            e.venue ?? '',
-            e.city ?? '',
-            e.state ?? '',
-            e.country ?? '',
-            dateStr,
-            e.description,
-          ]
-            .join(' ')
-            .toLowerCase();
-          return haystack.includes(search);
-        });
+      const filtered = data.filter((e: Event) => {
+        const dateStr = new Date(e.date).toLocaleDateString()
+        const haystack = [
+          e.title,
+          e.category ?? '',
+          e.venue ?? '',
+          e.city ?? '',
+          e.state ?? '',
+          e.country ?? '',
+          dateStr,
+          e.description,
+        ]
+          .join(' ')
+          .toLowerCase()
+        return haystack.includes(search.toLowerCase())
+      })
+
         setEvents(filtered);
       }
       setLoading(false);
@@ -112,6 +115,12 @@ export default function EventListClient() {
                 <h2 className="text-xl font-semibold text-gray-800 mb-1 truncate">
                   {event.title}
                 </h2>
+
+                {/* Tampilkan category */}
+                <p className="text-sm text-blue-600 font-medium mb-2">
+                  {event.category}
+                </p>
+
                 <p className="text-sm text-gray-500 mb-2">
                   Capacity: {event.capacity.toLocaleString()} tickets
                 </p>

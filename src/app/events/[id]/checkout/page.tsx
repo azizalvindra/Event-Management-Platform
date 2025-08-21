@@ -1,15 +1,17 @@
+// src/app/events/[id]/checkout/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface TicketType {
   id: string;
   name: string;
   price: number;
   available_seats: number;
-  status: string;
+  status?: string;
 }
 
 interface Event {
@@ -18,13 +20,14 @@ interface Event {
   date: string;
   venue: string;
   city: string;
-  price: number;
-  imageUrl: string | null;
+  price?: number;
+  imageUrl?: string | null;
   ticket_types: TicketType[];
-  capacity: number;
+  capacity?: number;
+  available_seats?: number;
+  category?: string;
 }
 
-// tipe promo yang di-return dari API validate
 interface Promotion {
   id: string;
   code: string;
@@ -33,6 +36,15 @@ interface Promotion {
   start_date: string;
   end_date: string;
   status: 'active' | 'inactive';
+}
+
+interface PromotionResponse {
+  promotion?: Promotion | null;
+}
+
+interface CreateTxnResponse {
+  transaction: { id: string };
+  // tambahkan field lain jika API mengembalikan lebih banyak
 }
 
 export default function CheckoutPage() {
@@ -45,7 +57,6 @@ export default function CheckoutPage() {
   const [selectedType, setSelectedType] = useState<TicketType | null>(null);
   const [quantity, setQuantity] = useState(1);
 
-  // voucher & promo state
   const [voucher, setVoucher] = useState('');
   const [promo, setPromo] = useState<Promotion | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -53,7 +64,6 @@ export default function CheckoutPage() {
 
   const [submitting, setSubmitting] = useState(false);
 
-  // fetch event + ticket types
   useEffect(() => {
     const qtyParam = searchParams.get('qty');
     const typeParam = searchParams.get('ticket_type');
@@ -61,30 +71,53 @@ export default function CheckoutPage() {
 
     async function fetchEvent() {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('events')
-        .select('*, ticket_types(*), capacity')
-        .eq('id', eventId)
-        .single();
+      try {
+        const { data, error } = await supabase
+          .from('events')
+          .select('*, ticket_types(*), capacity, available_seats, category')
+          .eq('id', eventId)
+          .single();
 
-      if (error) console.error(error);
-      else {
-        setEvent(data);
-        const pick = data.ticket_types.find(
-          (t: TicketType) => t.id === typeParam);
-        setSelectedType(pick ?? data.ticket_types[0] ?? null);
+        if (error) {
+          console.error('fetchEvent error', error);
+        } else if (data) {
+          // cast ke tipe Event (supabase typings jadi tidak unknown)
+          const evt = data as Event;
+
+          // normalize ticket_types status
+          if (Array.isArray(evt.ticket_types)) {
+            evt.ticket_types = evt.ticket_types.map((t) => ({
+              ...t,
+              status: t.available_seats <= 0 ? 'sold_out' : t.status ?? 'active',
+            }));
+          }
+
+          setEvent(evt);
+          const pick = evt.ticket_types?.find((t) => t.id === typeParam);
+          setSelectedType(pick ?? (evt.ticket_types?.[0] ?? null));
+        }
+      } catch (e) {
+        console.error('fetchEvent unexpected', e);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
 
     if (eventId) fetchEvent();
   }, [eventId, searchParams]);
 
-  if (loading || !event || !selectedType) {
+  if (loading) {
     return <p className="text-center py-10">Loading checkout…</p>;
   }
 
-  // hitung subtotal, discount dan total
+  if (!event) {
+    return <p className="text-center py-10 text-red-600">Event tidak ditemukan.</p>;
+  }
+
+  if (!selectedType) {
+    return <p className="text-center py-10">Tidak ada tipe tiket tersedia untuk event ini.</p>;
+  }
+
   const subtotal = selectedType.price * quantity;
   let discountAmount = 0;
   if (promo) {
@@ -93,9 +126,8 @@ export default function CheckoutPage() {
         ? Math.round((subtotal * promo.discount) / 100)
         : promo.discount;
   }
-  const total = subtotal - discountAmount;
+  const total = Math.max(0, subtotal - discountAmount);
 
-  // apply voucher
   const handleApplyVoucher = async () => {
     if (!voucher.trim()) {
       setPromo(null);
@@ -104,20 +136,29 @@ export default function CheckoutPage() {
     }
     setApplying(true);
     setApplyError(null);
+
     try {
-      const res = await fetch(
-        `/api/promotions/validate?event_id=${eventId}&code=${voucher.trim().toUpperCase()}`
-      );
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `Voucher invalid (${res.status})`);
+      // gunakan apiFetch (public endpoint) -> requireAuth false
+      const url = `/api/promotions/validate?event_id=${eventId}&code=${voucher.trim().toUpperCase()}`;
+      const data = await apiFetch<PromotionResponse>(url, { method: 'GET', requireAuth: false });
+
+      // expect shape { promotion }
+      if (!data?.promotion) {
+        throw new Error('Voucher tidak valid');
       }
-      const { promotion } = await res.json();
-      setPromo(promotion);
+
+      setPromo(data.promotion);
     } catch (err) {
       if (err instanceof Error) {
+        // bikin tipe sementara untuk error dengan kemungkinan ada 'details'
+        const detailedErr = err as Error & { details?: unknown };
+
+        if (detailedErr.details) {
+          setApplyError(`${err.message} — ${JSON.stringify(detailedErr.details)}`);
+        } else {
+          setApplyError(err.message);
+        }
         setPromo(null);
-        setApplyError(err.message);
       } else {
         setPromo(null);
         setApplyError('Unknown error occurred');
@@ -127,68 +168,151 @@ export default function CheckoutPage() {
     }
   };
 
-  // submit checkout
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // extra validation
-    if (selectedType.status === 'sold_out') {
-      alert('Maaf, tiket ini sudah habis.');
-      return;
-    }
-    if (quantity > selectedType.available_seats) {
-      alert(`Hanya tersisa ${selectedType.available_seats} tiket.`);
+    // basic validation
+    if (quantity <= 0) {
+      alert('Masukkan jumlah tiket minimal 1.');
       return;
     }
 
     setSubmitting(true);
-    const body = {
-    event_id: eventId,
-    voucher_code: promo?.code ?? null,
-    paid_amount: total,
-    items: [
-      {
-        ticket_type_id: selectedType.id,
-        quantity: quantity,
-      },
-    ],
+
+    try {
+      // Ambil session (supabase client) supaya kita bisa redirect ke login kalau perlu
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        alert('Silakan login terlebih dahulu untuk melanjutkan pembayaran.');
+        router.push('/login');
+        setSubmitting(false);
+        return;
+      }
+
+      // realtime check ke ticket_types (UI-friendly pre-check)
+      const { data: latestTicket, error: latestError } = await supabase
+        .from('ticket_types')
+        .select('id, available_seats')
+        .eq('id', selectedType.id)
+        .single();
+
+      // cast latestTicket ke known shape
+      const latest =
+        latestTicket as { id: string; available_seats: number } | null;
+
+      if (latestError || !latest) {
+        alert('Gagal cek kuota tiket. Coba lagi.');
+        setSubmitting(false);
+        return;
+      }
+
+      if (latest.available_seats <= 0) {
+        alert('Maaf, tiket ini sudah habis.');
+        setSelectedType((prev) =>
+          prev ? { ...prev, available_seats: 0, status: 'sold_out' } : prev
+        );
+        setSubmitting(false);
+        return;
+      }
+
+      if (quantity > latest.available_seats) {
+        alert(`Hanya tersisa ${latest.available_seats} tiket.`);
+        setSubmitting(false);
+        return;
+      }
+
+      // siapkan body transaksi
+      const body = {
+        event_id: eventId,
+        voucher_code: promo?.code ?? null,
+        paid_amount: total,
+        items: [
+          {
+            ticket_type_id: selectedType.id,
+            quantity: quantity,
+          },
+        ],
+      };
+
+      // gunakan apiFetch (otomatiskan token dan error)
+      try {
+        // beri tahu TypeScript bentuk response dengan generic
+        const created = await apiFetch<CreateTxnResponse>('/api/transactions', {
+          method: 'POST',
+          json: body,
+          requireAuth: true,
+        });
+
+        // sukses -> redirect ke halaman transaksi
+        router.push(`/transactions/${created.transaction.id}`);
+      } catch (err) {
+        type ServerError = Error & { details?: unknown };
+        // apiFetch melempar Error dengan message + details
+        if (err instanceof Error) {
+          const serverErr = err as ServerError;
+
+          // kalau ada detail dari server (mis. array insufficient), update UI
+          if (Array.isArray(serverErr.details)) {
+            // treat details as array of records (type-safe)
+            const details = serverErr.details as Array<Record<string, unknown>>;
+            for (const d of details) {
+              const ticket_type_id = d['ticket_type_id'] as string | undefined;
+              const available = typeof d['available'] === 'number' ? (d['available'] as number) : undefined;
+
+              if (ticket_type_id === selectedType.id && typeof available === 'number') {
+                setSelectedType((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        available_seats: available,
+                        status: available <= 0 ? 'sold_out' : prev.status,
+                      }
+                    : prev
+                );
+              }
+            }
+          }
+          alert('Error: ' + err.message);
+        } else {
+          alert('Error: Unknown error occurred');
+        }
+      }
+    } catch (err) {
+      console.error('handleSubmit unexpected', err);
+      if (err instanceof Error) {
+        alert('Error: ' + err.message);
+      } else {
+        alert('Error: Unknown error occurred');
+      }
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  try {
-    const res = await fetch('/api/transactions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      alert('Error: ' + (data.error || 'Failed to create transaction'));
-    } else {
-      router.push(`/transactions/${data.transaction.id}`);
-    }
-  } catch (error) {
-    if (error instanceof Error) {
-      alert('Error: ' + error.message);
-    } else {
-      alert('Error: Unknown error occurred');
-    }
-  } finally {
-    setSubmitting(false);
-  }
-};
+  const renderTicketLabel = (t: TicketType) => {
+    const isSoldOut = t.available_seats <= 0 || t.status === 'sold_out';
+    return `${t.name} - IDR ${t.price.toLocaleString()} (${isSoldOut ? 'Sold Out' : `${t.available_seats} left`})`;
+  };
 
   return (
     <main className="max-w-xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-4">Checkout: {event.title}</h1>
+      <h1 className="text-2xl font-bold mb-2">{event.title}</h1>
+      <p className="text-blue-600 mb-4 font-medium">{event.category}</p>
       <p className="text-gray-600 mb-6">
         {new Date(event.date).toLocaleDateString()} • {event.venue}, {event.city}
       </p>
 
-      <p className="text-sm text-gray-500 mb-6">
-        Total Capacity: {event.capacity.toLocaleString()} tickets
-      </p>
+      <div className="mb-4">
+        <p className="text-sm text-gray-500">
+          Total Capacity: {event.capacity?.toLocaleString() ?? '—'} tickets
+        </p>
+        <p className="text-sm text-gray-500">
+          Available Seats (total): {event.available_seats?.toLocaleString() ?? '—'}
+        </p>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 rounded-lg shadow">
         {/* Ticket Type */}
@@ -198,14 +322,23 @@ export default function CheckoutPage() {
             value={selectedType.id}
             onChange={e => {
               const t = event.ticket_types.find(t => t.id === e.target.value);
-              if (t) setSelectedType(t);
+              if (t) {
+                const normalized = {
+                  ...t,
+                  status: t.available_seats <= 0 ? 'sold_out' : t.status ?? 'active',
+                };
+                setSelectedType(normalized);
+              }
             }}
             className="w-full border rounded px-3 py-2"
           >
             {event.ticket_types.map(t => (
-              <option key={t.id} value={t.id} disabled={t.status === 'sold_out'}>
-                {`${t.name} - IDR ${t.price.toLocaleString()} (${t.available_seats} left)`}
-                {t.status === 'sold_out' && ' (Sold Out)'}
+              <option
+                key={t.id}
+                value={t.id}
+                disabled={t.available_seats <= 0 || t.status === 'sold_out'}
+              >
+                {renderTicketLabel(t)}
               </option>
             ))}
           </select>
@@ -219,9 +352,15 @@ export default function CheckoutPage() {
             min={1}
             max={selectedType.available_seats}
             value={quantity}
-            onChange={e => setQuantity(Number(e.target.value))}
+            onChange={e => {
+              const val = Math.max(1, Number(e.target.value || 1));
+              setQuantity(Math.min(val, selectedType.available_seats));
+            }}
             className="w-24 border rounded px-3 py-2"
           />
+          <p className="text-xs text-gray-500 mt-1">
+            Maks {selectedType.available_seats} tiket untuk tipe ini.
+          </p>
         </div>
 
         {/* Voucher */}
@@ -245,6 +384,7 @@ export default function CheckoutPage() {
             </button>
           </div>
           {applyError && <p className="text-sm text-red-500 mt-1">{applyError}</p>}
+          {promo && <p className="text-sm text-green-600 mt-1">Promo applied: {promo.code} — discount {promo.discount}{promo.type === 'percent' ? '%' : ''}</p>}
         </div>
 
         {/* Summary */}
@@ -255,9 +395,7 @@ export default function CheckoutPage() {
           </div>
           <div className="flex justify-between mb-2">
             <span>Discount</span>
-            <span className="text-green-600">
-              –IDR {discountAmount.toLocaleString()}
-            </span>
+            <span className="text-green-600">–IDR {discountAmount.toLocaleString()}</span>
           </div>
           <div className="flex justify-between font-semibold text-lg">
             <span>Total</span>
@@ -267,7 +405,7 @@ export default function CheckoutPage() {
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || selectedType.available_seats <= 0}
           className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg transition disabled:opacity-50"
         >
           {submitting ? 'Processing…' : 'Pay Now'}

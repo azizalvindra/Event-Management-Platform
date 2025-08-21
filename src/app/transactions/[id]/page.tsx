@@ -1,74 +1,141 @@
+// src/app/transactions/[id]/page.tsx
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { useParams } from 'next/navigation'
 import Image from 'next/image'
 import UploadProof from './upload-proof'
+import { apiFetch } from '@/lib/apiFetch'
 
-interface Transaction {
+export interface TicketType {
+  id: string
+  name: string
+  price: number
+  available_seats: number
+  status?: string
+}
+
+export interface TransactionItem {
+  id: string
+  transaction_id: string
+  ticket_type_id: string
+  quantity: number
+  created_at?: string
+  ticket_type?: TicketType | null
+}
+
+export interface Event {
+  id: string
+  title?: string
+  date?: string
+  venue?: string
+  city?: string
+  capacity?: number
+  available_seats?: number
+  imageUrl?: string | null
+  category?: string
+}
+
+export interface Transaction {
   id: string
   paid_amount: number
   status: string
-  proof_url?: string
+  proof_url?: string | null
   created_at: string
+  voucher_code?: string | null
+}
+
+export interface TransactionResponse {
+  transaction: Transaction;
+  items: TransactionItem[];
+  event?: Event | null;
 }
 
 export default function TransactionPage() {
   const [tx, setTx] = useState<Transaction | null>(null)
+  const [items, setItems] = useState<TransactionItem[]>([])
+  const [eventData, setEventData] = useState<Event | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [countdown, setCountdown] = useState<number | null>(null) // detik tersisa
-  const router = useRouter()
   const params = useParams()
-  const id = params?.id as string
+  const id = params?.id as string | undefined
 
-  // buat interval countdown ref supaya bisa clear interval
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  // useRef untuk menyimpan id interval (tipe number di browser)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  useEffect(() => {
-    const fetchTx = async () => {
-      try {
-        const res = await fetch(`/api/transactions/${id}`)
-        if (!res.ok) throw new Error('Gagal mengambil data transaksi')
-        const data = await res.json()
-        setTx(data)
-
-        // Jika status belum selesai atau batal dan belum ada bukti,
-        // hitung sisa waktu 2 jam dari created_at
-        if (
-          data.status !== 'done' &&
-          data.status !== 'canceled' &&
-          !data.proof_url
-        ) {
-          const createdAt = new Date(data.created_at).getTime()
-          const now = Date.now()
-          const twoHours = 2 * 60 * 60 * 1000
-          const diff = createdAt + twoHours - now
-          if (diff > 0) {
-            setCountdown(Math.floor(diff / 1000)) // detik tersisa
-          } else {
-            setCountdown(0)
-          }
-        } else {
-          setCountdown(null)
-        }
-      } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError('Unknown error occurred');
-      }
-    } finally {
-      setLoading(false);
+  const fetchTx = useCallback(async () => {
+    if (!id) {
+      setError('Missing transaction id')
+      setLoading(false)
+      return
     }
-  }
-    fetchTx()
 
-    // clear interval kalau komponen unmount
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+    setLoading(true)
+    setError(null)
+
+    try {
+      // pakai apiFetch dan query param 'id' supaya konsisten dgn route style project
+      const data = await apiFetch<TransactionResponse>(`/api/transactions/${id}`, {
+        method: 'GET',
+        requireAuth: false,
+      }).catch((e) => {
+        // apiFetch melempar Error terstruktur
+        throw e
+      })
+
+      // ekspektasi shape: { transaction, items, event }
+      const transaction: Transaction | undefined = data?.transaction
+      const txItems: TransactionItem[] = Array.isArray(data?.items) ? data.items : []
+      const ev : Event | null = data?.event ?? null;
+
+      if (!transaction) {
+        throw new Error('Response transaksi tidak valid')
+      }
+
+      setTx(transaction)
+      setItems(txItems)
+      setEventData(ev ?? null)
+
+      // set countdown logic: 2 jam sejak created_at jika belum done/canceled and no proof_url
+      if (
+        transaction.status !== 'done' &&
+        transaction.status !== 'canceled' &&
+        !transaction.proof_url
+      ) {
+        const createdAt = new Date(transaction.created_at).getTime()
+        const now = Date.now()
+        const twoHours = 2 * 60 * 60 * 1000
+        const diff = createdAt + twoHours - now
+        if (diff > 0) {
+          setCountdown(Math.floor(diff / 1000))
+        } else {
+          setCountdown(0)
+        }
+      } else {
+        setCountdown(null)
+      }
+    } catch (err) {
+      console.error('[TransactionPage] fetchTx error', err)
+      if (err instanceof Error) setError(err.message)
+      else setError('Unknown error occurred')
+    } finally {
+      setLoading(false)
     }
   }, [id])
+
+  useEffect(() => {
+    // initial fetch
+    fetchTx()
+
+    // cleanup on unmount
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+  }, [fetchTx])
 
   // jalankan countdown setiap 1 detik kalau ada countdown
   useEffect(() => {
@@ -76,14 +143,24 @@ export default function TransactionPage() {
 
     if (countdown === 0) {
       // waktu habis, refresh status supaya bisa cek expired atau logic lain
-      router.refresh()
+      // kita panggil fetchTx untuk reload data
+      fetchTx()
       return
+    }
+
+    // clear dulu kalau ada
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
     }
 
     intervalRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (!prev || prev <= 1) {
-          if (intervalRef.current) clearInterval(intervalRef.current)
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current)
+            intervalRef.current = null
+          }
           return 0
         }
         return prev - 1
@@ -91,9 +168,12 @@ export default function TransactionPage() {
     }, 1000)
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
     }
-  }, [countdown, router])
+  }, [countdown, fetchTx])
 
   // format countdown ke jam:menit:detik
   const formatCountdown = (seconds: number) => {
@@ -103,6 +183,12 @@ export default function TransactionPage() {
     return `${h.toString().padStart(2, '0')}:${m
       .toString()
       .padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  }
+
+  // Callback untuk dipassing ke UploadProof agar setelah upload kita reload data lokal
+  const handleUploadSuccess = async () => {
+    // refresh transaction data lebih halus (tanpa full page refresh)
+    await fetchTx()
   }
 
   if (loading) {
@@ -161,9 +247,7 @@ export default function TransactionPage() {
         <p>
           Status:{' '}
           <span
-            className={`font-semibold ${
-              statusColors[tx.status] || statusColors.default
-            }`}
+            className={`font-semibold ${statusColors[tx.status] || statusColors.default}`}
           >
             {prettyStatus(tx.status)}
           </span>
@@ -176,6 +260,50 @@ export default function TransactionPage() {
           }).format(new Date(tx.created_at))}
         </p>
       </div>
+
+      {/* Event summary (jika ada) */}
+      {eventData && (
+        <div className="border rounded p-3">
+          <p className="font-semibold">{eventData.title ?? 'Event'}</p>
+          <p className="text-sm text-gray-500">
+            {eventData.date ? new Date(eventData.date).toLocaleDateString() : null}{' '}
+            {eventData.venue ? `• ${eventData.venue}` : null}
+          </p>
+          {eventData.imageUrl && (
+            <div className="relative w-full h-40 mt-3 rounded overflow-hidden border">
+              <Image src={eventData.imageUrl} alt="Event" fill className="object-cover" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Items (jika ada) */}
+      {items && items.length > 0 && (
+        <div>
+          <p className="font-semibold mb-2">Item Transaksi</p>
+          <ul className="space-y-2">
+            {items.map((it) => (
+              <li key={it.id} className="flex justify-between items-center">
+                <div>
+                  <div className="font-medium">
+                    {it.ticket_type?.name ?? it.ticket_type_id}
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    Qty: {it.quantity}
+                    {it.ticket_type ? ` • Harga: IDR ${it.ticket_type.price.toLocaleString()}` : ''}
+                  </div>
+                </div>
+                <div className="text-sm text-gray-700">
+                  IDR{' '}
+                  {it.ticket_type
+                    ? (it.ticket_type.price * it.quantity).toLocaleString()
+                    : '-'}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Countdown dan info upload bukti */}
       {countdown !== null && countdown > 0 && (
@@ -208,13 +336,12 @@ export default function TransactionPage() {
       )}
 
       {/* Jika status belum done/canceled dan belum ada proof_url, tampilkan UploadProof */}
-      {tx.status !== 'done' &&
-        tx.status !== 'canceled' &&
-        !tx.proof_url &&
-        countdown !== 0 && <UploadProof transactionId={tx.id} />}
+      {tx.status !== 'done' && tx.status !== 'canceled' && !tx.proof_url && countdown !== 0 && (
+        <UploadProof transactionId={tx.id} onUploadSuccess={handleUploadSuccess} />
+      )}
 
       <button
-        onClick={() => router.refresh()}
+        onClick={() => fetchTx()}
         className="w-full py-2 rounded bg-gray-100 hover:bg-gray-200 transition"
       >
         Refresh Status

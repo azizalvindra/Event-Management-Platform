@@ -1,128 +1,143 @@
 // src/app/api/transactions/[id]/route.ts
-import { NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabaseClient'
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
-// Helper: ambil id dari params yang disediakan Next atau fallback dari URL
-function extractIdFrom(request: Request, idParam?: string): string | undefined {
-  if (idParam) return idParam
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 
-  try {
-    const url = new URL(request.url)
-    const parts = url.pathname.split('/').filter(Boolean)
-    return parts[parts.length - 1]
-  } catch {
-    return undefined
-  }
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+  throw new Error("Missing Supabase env keys");
 }
 
-/**
- * GET handler
- * Params sekarang Promise<{id: string}>
- */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const id = extractIdFrom(request, (await params).id)
-  if (!id) {
-    return NextResponse.json({ error: 'Missing id param' }, { status: 400 })
-  }
+const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
-  try {
-    const { data, error } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('id', id)
-      .single()
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 404 })
-    }
-
-    return NextResponse.json(data)
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message ?? 'Server error' }, { status: 500 })
-  }
+// ---- Types untuk hasil query Supabase ----
+interface TransactionItem {
+  id: string;
+  transaction_id: string;
+  ticket_type_id: string;
+  quantity: number;
+  [key: string]: unknown; // biar fleksibel
 }
 
-/**
- * PATCH handler
- * Params juga Promise<{id: string}>
- */
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const id = extractIdFrom(request, (await params).id)
-  if (!id) {
-    return NextResponse.json({ error: 'Missing id param' }, { status: 400 })
-  }
+interface TicketType {
+  id: string;
+  name: string;
+  price: number;
+  [key: string]: unknown;
+}
 
-  // baca body dengan aman
-  let rawBody: unknown
+interface Transaction {
+  id: string;
+  event_id: string | null;
+  status: string;
+  [key: string]: unknown;
+}
+
+export async function GET(request: Request, context: unknown) {
   try {
-    rawBody = await request.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid or missing JSON body' }, { status: 400 })
-  }
+    // Ambil id dari context (cast aman) atau fallback dari request.url
+    const params = (context as { params?: { id?: string } } | null)?.params;
+    let id = params?.id;
 
-  if (
-    typeof rawBody !== 'object' ||
-    rawBody === null ||
-    !('status' in rawBody) ||
-    typeof (rawBody as Record<string, unknown>)['status'] !== 'string'
-  ) {
-    return NextResponse.json({ error: 'Missing or invalid "status" in request body' }, { status: 400 })
-  }
-
-  const status = (rawBody as Record<string, unknown>)['status'] as string
-
-  try {
-    const { data: transaction, error: updateError } = await supabase
-      .from('transactions')
-      .update({ status })
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 400 })
-    }
-
-    if (!transaction) {
-      return NextResponse.json({ error: 'Transaction not found after update' }, { status: 404 })
-    }
-
-    if (status === 'paid') {
-      const eventId = (transaction as Record<string, unknown>)['event_id']
-      if (!eventId || typeof eventId !== 'string') {
-        return NextResponse.json({
-          error: 'Transaction updated but event_id missing or invalid for capacity update',
-        }, { status: 500 })
-      }
-
+    if (!id) {
       try {
-        const { error: rpcError } = await supabase.rpc('update_event_capacity', {
-          input_event_id: eventId,
-        })
-
-        if (rpcError) {
-          return NextResponse.json({
-            error: `Update success, but failed to update capacity: ${rpcError.message}`,
-          }, { status: 500 })
-        }
-      } catch (rpcErr: unknown) {
-        const rpcMsg = rpcErr instanceof Error ? rpcErr.message : String(rpcErr)
-        return NextResponse.json({
-          error: `Update success, but failed to call RPC: ${rpcMsg}`,
-        }, { status: 500 })
+        // fallback: parse dari url terakhir (misalnya /api/transactions/123)
+        const url = new URL(request.url);
+        const parts = url.pathname.split("/").filter(Boolean);
+        id = parts[parts.length - 1] ?? undefined;
+      } catch {
+        // ignore parsing error
       }
     }
 
-    return NextResponse.json(transaction)
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message ?? 'Server error' }, { status: 500 })
+    if (!id) {
+      return NextResponse.json({ error: "Missing transaction id" }, { status: 400 });
+    }
+
+    // 1) ambil transaksi
+    const { data: tx, error: txError } = await supabaseAdmin
+      .from("transactions")
+      .select("*, transaction_items(*)")
+      .eq("id", id)
+      .single<Transaction>();
+
+    if (txError) {
+      if (txError.code === "PGRST116" || txError.message?.includes("No rows")) {
+        return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
+      }
+      console.error("[GET /api/transactions/:id] txError", txError);
+      return NextResponse.json({ error: txError.message }, { status: 500 });
+    }
+
+    // 2) ambil items
+    const { data: items, error: itemsError } = await supabaseAdmin
+      .from("transaction_items")
+      .select("*")
+      .eq("transaction_id", id);
+
+    if (itemsError) {
+      console.error("[GET /api/transactions/:id] itemsError", itemsError);
+      return NextResponse.json({ error: "Failed to fetch transaction items" }, { status: 500 });
+    }
+
+    // 3) ambil ticket_types
+    const ticketTypeIds = (items || []).map((it: TransactionItem) => it.ticket_type_id).filter(Boolean);
+    let ticketTypesMap: Record<string, TicketType> = {};
+
+    if (ticketTypeIds.length > 0) {
+      const { data: tts, error: ttError } = await supabaseAdmin
+        .from("ticket_types")
+        .select("*")
+        .in("id", ticketTypeIds);
+
+      if (ttError) {
+        console.error("[GET /api/transactions/:id] ticket_types error", ttError);
+        return NextResponse.json({ error: "Failed to fetch ticket types" }, { status: 500 });
+      }
+
+      ticketTypesMap = (tts || []).reduce<Record<string, TicketType>>((acc, t) => {
+        const tt = t as TicketType;
+        acc[tt.id] = tt;
+        return acc;
+      }, {});
+    }
+
+    // 4) ambil event
+    let eventData: unknown = null;
+    if ((tx as Transaction)?.event_id) {
+      const { data: ev, error: evError } = await supabaseAdmin
+        .from("events")
+        .select("*")
+        .eq("id", (tx as Transaction).event_id)
+        .single();
+
+      if (evError) {
+        console.warn("[GET /api/transactions/:id] event not found", evError);
+      } else {
+        eventData = ev;
+      }
+    }
+
+    // 5) gabungkan items + ticket type
+    const enrichedItems = (items || []).map((it: TransactionItem) => ({
+      ...it,
+      ticket_type: ticketTypesMap[it.ticket_type_id] ?? null,
+    }));
+
+    // hasil final
+    const response = {
+      transaction: tx,
+      items: enrichedItems,
+      event: eventData,
+    };
+
+    return NextResponse.json(response);
+  } catch (err) {
+    console.error("[GET /api/transactions/:id] Unexpected error", err);
+    if (err instanceof Error) {
+      return NextResponse.json({ error: err.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

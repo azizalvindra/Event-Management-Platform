@@ -1,19 +1,66 @@
+// src/app/transactions/[id]/upload-proof.tsx
 'use client'
 
-import { useState } from 'react'
+import React, { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+import { apiFetch } from '@/lib/apiFetch'
+import Image from 'next/image'
 
-export default function UploadProof({ transactionId, onUploadSuccess }: { transactionId: string, onUploadSuccess?: () => void }) {
+export default function UploadProof({
+  transactionId,
+  onUploadSuccess,
+}: {
+  transactionId: string
+  onUploadSuccess?: () => void
+}) {
+  const router = useRouter()
   const [file, setFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
 
+  const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+
+  // cleanup preview URL whenever previewUrl changes or component unmounts
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+      }
+    }
+  }, [previewUrl])
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setError(null)
     setSuccess(false)
-    const selected = e.target.files?.[0]
-    if (selected) setFile(selected)
+
+    const selected = e.target.files?.[0] ?? null
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl)
+      setPreviewUrl(null)
+    }
+
+    if (!selected) {
+      setFile(null)
+      return
+    }
+
+    if (!selected.type.startsWith('image/')) {
+      setError('File harus berupa gambar (jpg, png, dsb).')
+      setFile(null)
+      return
+    }
+
+    if (selected.size > MAX_FILE_SIZE) {
+      setError('Ukuran file terlalu besar. Maksimal 5MB.')
+      setFile(null)
+      return
+    }
+
+    setFile(selected)
+    setPreviewUrl(URL.createObjectURL(selected))
   }
 
   const handleUpload = async () => {
@@ -21,54 +68,106 @@ export default function UploadProof({ transactionId, onUploadSuccess }: { transa
       setError('Pilih file terlebih dahulu')
       return
     }
+
     setUploading(true)
     setError(null)
+    setSuccess(false)
+
     try {
-      const fileExt = file.name.split('.').pop() || 'jpg'
+      const rawExt = (file.name.split('.').pop() || 'jpg')
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .toLowerCase()
+      const fileExt = rawExt.length ? rawExt : 'jpg'
       const filePath = `proofs/${transactionId}/${transactionId}_${Date.now()}.${fileExt}`
-      const { error: uploadError } = await supabase.storage.from('transaction-proofs').upload(filePath, file, { cacheControl: '3600', upsert: false })
-      if (uploadError) throw new Error(uploadError.message)
 
-      const { data: urlData } = supabase.storage.from('transaction-proofs').getPublicUrl(filePath)
-      const publicUrl = urlData?.publicUrl
-      if (!publicUrl) throw new Error('Gagal mendapatkan URL bukti pembayaran')
+      // upload ke bucket
+      const { error: uploadError } = await supabase.storage
+        .from('transaction-proofs')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+        })
 
-      const res = await fetch(`/api/transactions/${transactionId}/proof`, {
+      if (uploadError) {
+        throw new Error(uploadError.message || 'Gagal mengunggah file ke storage')
+      }
+
+      // dapatkan public URL (tanpa any)
+      const { data } = supabase.storage.from('transaction-proofs').getPublicUrl(filePath)
+      const publicUrl: string | null = data?.publicUrl ?? null
+      if (!publicUrl) {
+        throw new Error('Gagal mendapatkan URL publik untuk bukti pembayaran')
+      }
+
+      // kirim ke API proof
+      await apiFetch(`/api/transactions/${encodeURIComponent(transactionId)}/proof`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ proof_url: publicUrl }),
+        json: { proof_url: publicUrl },
       })
 
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || 'Gagal update transaksi')
-      }
-
       setSuccess(true)
-      if (onUploadSuccess) onUploadSuccess()
-
-    } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError('Terjadi kesalahan saat upload');
+      setFile(null)
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+        setPreviewUrl(null)
       }
+
+      if (onUploadSuccess) {
+        try {
+          onUploadSuccess()
+        } catch {
+          // ignore
+        }
+      } else {
+        router.refresh()
+      }
+    } catch (err) {
+      console.error('[UploadProof] error', err)
+      if (err instanceof Error) setError(err.message)
+      else setError('Terjadi kesalahan saat upload')
     } finally {
-      setUploading(false);
+      setUploading(false)
     }
   }
 
   return (
     <div className="space-y-4 p-4 border rounded-lg bg-white shadow">
       <h2 className="text-lg font-semibold">Upload Bukti Pembayaran</h2>
-      <input type="file" accept="image/*" onChange={handleFileChange} className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100" />
+
+      {previewUrl ? (
+        <div className="mb-2">
+          <p className="text-sm text-gray-500 mb-1">Preview:</p>
+          <div className="relative w-full h-48 rounded overflow-hidden border">
+            <Image
+              src={previewUrl}
+              alt="preview"
+              fill
+              className="object-cover"
+            />
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">Pilih gambar bukti pembayaran (maks 5MB).</p>
+      )}
+
+      <input
+        type="file"
+        accept="image/*"
+        onChange={handleFileChange}
+        disabled={uploading}
+        className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100"
+      />
+
       <button
         onClick={handleUpload}
         disabled={uploading || !file}
-        className={`w-full py-2 rounded text-white font-semibold transition ${uploading || !file ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+        className={`w-full py-2 rounded text-white font-semibold transition ${
+          uploading || !file ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
+        }`}
       >
         {uploading ? 'Mengunggah...' : 'Upload Bukti'}
       </button>
+
       {error && <p className="text-sm text-red-500">{error}</p>}
       {success && <p className="text-sm text-green-600">Bukti pembayaran berhasil diupload!</p>}
     </div>

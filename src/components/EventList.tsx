@@ -1,7 +1,10 @@
+// src/components/EventList.tsx
+
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
 import { EventCard } from './EventCard';
+
 
 export type Event = {
   id: string;
@@ -11,33 +14,41 @@ export type Event = {
   price: number;
   imageUrl: string;
   description: string;
+  category: string;
 };
 
-export function EventList() {
+interface EventListProps {
+  category?: string;
+}
+
+export function EventList({ category }: EventListProps) {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch('/api/events')
-      .then((res) => {
+    const fetchEvents = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch('/api/events');
         if (!res.ok) throw new Error('Failed to fetch events');
-        return res.json();
-      })
-      .then((data) => {
-        setEvents(data);
+        const data: Event[] = await res.json();
+        const filtered = category
+          ? data.filter((evt) => evt.category.toLowerCase() === category.toLowerCase())
+          : data;
+        setEvents(filtered);
         setError(null);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error('Error fetching events:', err);
         setError('Gagal memuat data event. Silakan coba lagi nanti.');
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchEvents();
+  }, [category]);
   
-
   if (loading) return <p className="text-center py-10">Loading events...</p>;
   if (error) return <p className="text-center text-red-600 py-10">{error}</p>;
   if (!Array.isArray(events) || events.length === 0)
@@ -45,14 +56,11 @@ export function EventList() {
 
   return (
     <div className="relative">
-      {/* Tombol panah kiri */}
-      
 
       {/* Container scroll horizontal */}
       <div
         ref={scrollRef}
         className="flex space-x-6 overflow-x-auto scrollbar-hide py-4 px-10 scroll-smooth"
-        style={{ scrollBehavior: 'smooth' }}
       >
         {events.map((evt) => (
           <div key={evt.id} className="flex-shrink-0 w-[280px]">
@@ -67,9 +75,6 @@ export function EventList() {
           </div>
         ))}
       </div>
-
-      {/* Tombol panah kanan */}
-      
     </div>
   );
 }

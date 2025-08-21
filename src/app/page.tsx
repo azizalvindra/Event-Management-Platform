@@ -12,13 +12,13 @@ export default function HomePage() {
   const [current, setCurrent] = useState(0);
   const length = slides.length;
 
-  // Ref container scroll horizontal upcoming events
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const nextSlide = useCallback(() => {
     setCurrent((prev) => (prev + 1) % length);
   }, [length]);
-    const prevSlide = useCallback(() => {
+
+  const prevSlide = useCallback(() => {
     setCurrent((prev) => (prev - 1 + length) % length);
   }, [length]);
 
@@ -26,18 +26,6 @@ export default function HomePage() {
     const timer = setInterval(nextSlide, 5000);
     return () => clearInterval(timer);
   }, [length, nextSlide]);
-
-
-  const scroll = (direction: 'left' | 'right') => {
-    if (!scrollRef.current) return;
-    const { clientWidth, scrollLeft } = scrollRef.current;
-    const scrollAmount = clientWidth * 0.8;
-    if (direction === 'left') {
-      scrollRef.current.scrollTo({ left: scrollLeft - scrollAmount, behavior: 'smooth' });
-    } else {
-      scrollRef.current.scrollTo({ left: scrollLeft + scrollAmount, behavior: 'smooth' });
-    }
-  };
 
   return (
     <main className="bg-gray-50 min-h-screen">
@@ -52,12 +40,8 @@ export default function HomePage() {
           >
             <Image src={src} alt={`Slide ${i}`} fill className="object-cover" priority={i === 0} />
             <div className="absolute inset-0 bg-black/40 flex flex-col justify-center items-center px-6">
-              <h1 className="text-white text-4xl md:text-5xl font-bold mb-2 drop-shadow-lg text-center">
-                {/* Judul kosong, bisa diisi nanti */}
-              </h1>
-              <p className="text-white text-lg md:text-xl drop-shadow-md text-center">
-                {/* Deskripsi kosong, bisa diisi nanti */}
-              </p>
+              <h1 className="text-white text-4xl md:text-5xl font-bold mb-2 drop-shadow-lg text-center" />
+              <p className="text-white text-lg md:text-xl drop-shadow-md text-center" />
             </div>
           </div>
         ))}
@@ -93,32 +77,36 @@ export default function HomePage() {
       </div>
 
       {/* Upcoming Events dengan scroll horizontal */}
-      <section className="py-16">
+      <section className="py-16 relative">
         <div className="max-w-screen-xl mx-auto px-6 relative">
           <h2 className="text-3xl font-bold mb-6 text-center">Upcoming Events</h2>
 
-          {/* Tombol panah kiri */}
+           {/* Tombol panah kiri */}
           <button
-            onClick={() => scroll('left')}
+            onClick={() => {
+              if (!scrollRef.current) return;
+              scrollRef.current.scrollBy({ left: -scrollRef.current.clientWidth * 0.8, behavior: 'smooth' });
+            }}
             className="absolute left-0 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white p-2 rounded-full shadow z-10"
             aria-label="Scroll Left"
           >
             <IoIosArrowBack size={24} />
           </button>
 
-          {/* Container scroll */}
+          {/* Scrollable container */}
           <div
             ref={scrollRef}
             className="flex space-x-6 overflow-x-auto scrollbar-hide scroll-smooth py-4 px-2"
-            style={{ scrollBehavior: 'smooth' }}
           >
-            {/* Panggil EventList, asumsikan sudah render card event */}
             <EventList />
           </div>
 
           {/* Tombol panah kanan */}
           <button
-            onClick={() => scroll('right')}
+            onClick={() => {
+              if (!scrollRef.current) return;
+              scrollRef.current.scrollBy({ left: scrollRef.current.clientWidth * 0.8, behavior: 'smooth' });
+            }}
             className="absolute right-0 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white p-2 rounded-full shadow z-10"
             aria-label="Scroll Right"
           >
@@ -127,7 +115,7 @@ export default function HomePage() {
 
           <div className="text-center mt-8">
             <Link href="/events">
-              <button className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg transition">
+              <button className="bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-semibold py-3 px-8 rounded-full shadow-lg transition transform hover:-translate-y-1 hover:scale-105">
                 🎫 Lihat Semua Event
               </button>
             </Link>
@@ -135,21 +123,20 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Section kategori event */}
+      {/* Section kategori event vertical */}
       <section className="py-16 bg-white">
         <div className="max-w-screen-xl mx-auto px-6">
           <h2 className="text-3xl font-bold mb-8 text-center">Kategori Event</h2>
-          <div className="flex justify-center gap-8 flex-wrap">
-            <Link href="/events?category=workshop">
-              <div className="cursor-pointer bg-blue-100 text-blue-800 px-6 py-4 rounded-lg shadow-md hover:bg-blue-200 transition">
-                Workshop
+
+          <div className="flex flex-col gap-12">
+            {['Workshop', 'Konser', 'Seminar'].map((cat) => (
+              <div key={cat} className="space-y-4">
+                <h3 className="text-2xl font-semibold">{cat}</h3>
+                <div className="flex gap-6 overflow-x-auto scrollbar-hide">
+                  <EventList category={cat.toLowerCase()} />
+                </div>
               </div>
-            </Link>
-            <Link href="/events?category=konser">
-              <div className="cursor-pointer bg-green-100 text-green-800 px-6 py-4 rounded-lg shadow-md hover:bg-green-200 transition">
-                Konser
-              </div>
-            </Link>
+            ))}
           </div>
         </div>
       </section>
