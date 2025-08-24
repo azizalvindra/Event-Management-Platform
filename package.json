@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "start:cron": "node ./dist/app/scripts/transactionCron.js",
+    "dev:cron": "ts-node ./src/app/scripts/transactionCron.ts",
     "start": "next start",
     "lint": "next lint"
   },

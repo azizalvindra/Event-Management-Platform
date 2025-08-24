@@ -23,7 +23,6 @@ export default function UploadProof({
 
   const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 
-  // cleanup preview URL whenever previewUrl changes or component unmounts
   useEffect(() => {
     return () => {
       if (previewUrl) {
@@ -99,11 +98,20 @@ export default function UploadProof({
         throw new Error('Gagal mendapatkan URL publik untuk bukti pembayaran')
       }
 
-      // kirim ke API proof
-      await apiFetch(`/api/transactions/${encodeURIComponent(transactionId)}/proof`, {
+      // === PENTING: panggil API server-side yang memakai service role
+      // Endpoint: POST /api/transactions/:id
+      // Body: { fileUrl: string }
+      const apiResp = await apiFetch(`/api/transactions/${encodeURIComponent(transactionId)}`, {
         method: 'POST',
-        json: { proof_url: publicUrl },
+        json: { fileUrl: publicUrl },
       })
+
+      // apiFetch seharusnya melempar error jika status tidak OK,
+      // tapi kalau implementasimu mengembalikan object, cek ok property
+      if (apiResp && typeof apiResp === 'object' && 'ok' in apiResp && apiResp.ok === false) {
+        const msg = (apiResp as any).error ?? 'Server menolak permintaan'
+        throw new Error(String(msg))
+      }
 
       setSuccess(true)
       setFile(null)
@@ -138,12 +146,7 @@ export default function UploadProof({
         <div className="mb-2">
           <p className="text-sm text-gray-500 mb-1">Preview:</p>
           <div className="relative w-full h-48 rounded overflow-hidden border">
-            <Image
-              src={previewUrl}
-              alt="preview"
-              fill
-              className="object-cover"
-            />
+            <Image src={previewUrl} alt="preview" fill className="object-cover" />
           </div>
         </div>
       ) : (

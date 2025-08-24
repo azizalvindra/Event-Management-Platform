@@ -1,6 +1,6 @@
 // src/app/api/transactions/[id]/route.ts
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, PostgrestError } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -17,7 +17,7 @@ interface TransactionItem {
   transaction_id: string;
   ticket_type_id: string;
   quantity: number;
-  [key: string]: unknown; // biar fleksibel
+  [key: string]: unknown;
 }
 
 interface TicketType {
@@ -31,25 +31,22 @@ interface Transaction {
   id: string;
   event_id: string | null;
   status: string;
+  payment_proof_url?: string | null;
+  proof_url?: string | null;
+  payment_proof_uploaded_at?: string | null;
   [key: string]: unknown;
 }
 
-export async function GET(request: Request, context: unknown) {
+/**
+ * GET handler (ambil data transaksi + items + event)
+ * context.params datang sebagai Promise dari Next.js App Router
+ */
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
   try {
-    // Ambil id dari context (cast aman) atau fallback dari request.url
-    const params = (context as { params?: { id?: string } } | null)?.params;
-    let id = params?.id;
-
-    if (!id) {
-      try {
-        // fallback: parse dari url terakhir (misalnya /api/transactions/123)
-        const url = new URL(request.url);
-        const parts = url.pathname.split("/").filter(Boolean);
-        id = parts[parts.length - 1] ?? undefined;
-      } catch {
-        // ignore parsing error
-      }
-    }
+    const { id } = await context.params;
 
     if (!id) {
       return NextResponse.json({ error: "Missing transaction id" }, { status: 400 });
@@ -83,6 +80,7 @@ export async function GET(request: Request, context: unknown) {
 
     // 3) ambil ticket_types
     const ticketTypeIds = (items || []).map((it: TransactionItem) => it.ticket_type_id).filter(Boolean);
+
     let ticketTypesMap: Record<string, TicketType> = {};
 
     if (ticketTypeIds.length > 0) {
@@ -126,15 +124,87 @@ export async function GET(request: Request, context: unknown) {
     }));
 
     // hasil final
-    const response = {
+    const responseBody = {
       transaction: tx,
       items: enrichedItems,
       event: eventData,
     };
 
-    return NextResponse.json(response);
+    return NextResponse.json(responseBody);
   } catch (err) {
     console.error("[GET /api/transactions/:id] Unexpected error", err);
+    if (err instanceof Error) {
+      return NextResponse.json({ error: err.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+/**
+ * POST handler (update proof URL kedua kolom sekaligus)
+ * - Expect JSON body: { fileUrl: string }
+ * - Menggunakan Supabase service key (trusted) sehingga bypass RLS
+ */
+type PostBody = {
+  fileUrl: string;
+};
+
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    if (!id) {
+      return NextResponse.json({ error: "Missing transaction id" }, { status: 400 });
+    }
+
+    // validate content-type + body
+    const contentType = request.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      return NextResponse.json({ error: "Expected application/json" }, { status: 400 });
+    }
+
+    const body = (await request.json()) as PostBody;
+    const fileUrl = (body.fileUrl ?? "").trim();
+
+    if (!fileUrl) {
+      return NextResponse.json({ error: "fileUrl is required" }, { status: 400 });
+    }
+    // optional: basic url check
+    if (!/^https?:\/\//i.test(fileUrl)) {
+      return NextResponse.json({ error: "fileUrl must be a valid URL" }, { status: 400 });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // update kedua kolom sekaligus + set timestamp + status
+    const { data, error } = await supabaseAdmin
+      .from("transactions")
+      .update({
+        payment_proof_url: fileUrl,
+        proof_url: fileUrl,
+        payment_proof_uploaded_at: nowIso,
+        status: "waiting_confirmation",
+      })
+      .eq("id", id)
+      .select()
+      .single<Transaction>();
+
+    if (error) {
+      const pge = error as PostgrestError;
+      console.error("[POST /api/transactions/:id] supabase update error", {
+        message: pge.message,
+        details: pge.details ?? undefined,
+        hint: pge.hint ?? undefined,
+      });
+      // jika constraint violation, kirimkan info supaya frontend bisa handle
+      return NextResponse.json({ error: pge.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, transaction: data }, { status: 200 });
+  } catch (err) {
+    console.error("[POST /api/transactions/:id] Unexpected error", err);
     if (err instanceof Error) {
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
